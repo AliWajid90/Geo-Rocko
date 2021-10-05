@@ -1,0 +1,91 @@
+//Area- use your own polygon
+var mask = ee.FeatureCollection('users/aliabbaswar/Pak_Div')
+      .filter(ee.Filter.inList("NAME_3",["Haripur"])).geometry();
+
+var geometry = mask;
+
+
+function returnFloat(img){
+  return img.float()}
+
+
+// import virrs data
+var DMSP = ee.ImageCollection("NOAA/DMSP-OLS/NIGHTTIME_LIGHTS").select(["avg_vis"],["nightlight"]).map(returnFloat)
+
+var a = 14.758;
+var b = 0.448;
+
+// apply power relation to viirs data
+// from here: https://www.iirs.gov.in/iirs/sites/default/files/StudentThesis/S_6027253_Reshma_Jeswani_MSc_Thesis.pdf
+// maybe use log function instead.
+function scaleNL(img){
+  var t = img.get("system:time_start");
+  img = img.where(img.lt(0.001),0.001);
+  return ee.Image(ee.Image(a).multiply(img.pow(b))).set("system:time_start",t).rename("nightlight").float();
+}
+
+// import virrs data
+var viirs = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG").select("avg_rad").map(scaleNL);
+
+// combine dataseries
+var nightlights = DMSP.merge(viirs);
+
+// This field contains UNIX time in milliseconds.
+var timeField = 'system:time_start';
+
+// select nighlights band
+var modeled =  ee.ImageCollection(nightlights.select(['nightlight']));
+
+// Smoothing ---------------------------------------------------------------
+var join = ee.Join.saveAll({
+  matchesKey: 'images'
+});
+
+var diffFilter = ee.Filter.maxDifference({
+  difference: 1000 * 60 * 60 * 24 *365,
+  leftField: timeField, 
+  rightField: timeField
+});
+
+var threeNeighborJoin = join.apply({
+  primary: modeled, 
+  secondary: modeled, 
+  condition: diffFilter
+});
+
+
+// smooth image collection
+var smoothed = ee.ImageCollection(threeNeighborJoin.map(function(image) {
+  var collection = ee.ImageCollection.fromImages(image.get('images'));
+  return ee.Image(image).addBands(collection.mean().rename('mean'));
+}));
+
+
+// set display parameters
+var display = {
+  title: "night lights",
+  fontSize: 12,
+  hAxis: {title: 'Year'},
+  vAxis: {title: "avg_vis"}};
+
+
+// add chart
+print(ui.Chart.image.series(
+  smoothed.select(['nightlight', 'mean']), geometry, ee.Reducer.mean(), 30)
+    .setSeriesNames(['nightlight', 'mean'])
+    .setOptions({
+      title: 'smoothed',
+      lineWidth: 1,
+      pointSize: 3,
+}));
+
+// set viz paramater
+var viz = {min:0, max:50, palette:['000000','700000','808080','FFFF00','ffffff','ffffff','ffffff']};
+
+// get the 1995 and 2018 image
+var img1995 = smoothed.filterDate(ee.Date.fromYMD(1995,1,1),ee.Date.fromYMD(1995,12,31));
+var img2018 = smoothed.filterDate(ee.Date.fromYMD(2018,1,1),ee.Date.fromYMD(2018,12,31));
+
+// add the maps
+Map.addLayer(ee.Image(img1995.first().select("mean")),viz,"1995");
+Map.addLayer(ee.Image(img2018.first().select("mean")),viz,"2018");
