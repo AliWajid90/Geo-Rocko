@@ -1,0 +1,62 @@
+
+//*****************CLOUD MASKING**************************
+// Function to mask cloud from built-in quality band
+// information on cloud
+// Function to mask clouds using the Sentinel-2 QA band.
+function maskS2clouds(image) {
+  var qa = image.select('QA60')
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(
+             qa.bitwiseAnd(cirrusBitMask).eq(0))
+
+  // Return the masked and scaled data, without the QA bands.
+  return image.updateMask(mask).divide(10000)
+      .select("B.*")
+      .copyProperties(image, ["system:time_start"])
+}
+
+// Function to calculate and add an NDVI band
+var addNDVI = function(image) {
+return image.addBands(image.normalizedDifference(['B8', 'B4']));
+};
+
+
+// Create image collection of S-2 imagery for the perdiod 2015-2021
+var S2 = ee.ImageCollection("COPERNICUS/S2")
+//filter start and end date
+.filterDate('2019-06-01', '2021-07-31')
+.filterMetadata('CLOUDY_PIXEL_PERCENTAGE', 'less_than', 10)
+//Map cloud function on the collection
+.map(maskS2clouds)
+//filter according to drawn boundary
+.filterBounds(geometry);
+
+// Add NDVI band to image collection
+var S2 = S2.map(addNDVI);
+// Extract NDVI band and create NDVI median composite image
+var NDVI = S2.select(['nd']);
+var NDVImed = NDVI.median();
+
+// Create palettes for display of NDVI
+var ndvi_pal = ['#d73027', '#f46d43', '#fdae61', '#fee08b', '#d9ef8b',
+'#a6d96a'];
+
+// Display NDVI results on map
+Map.addLayer(NDVImed.clip(geometry), {min:-0.5, max:0.9, palette: ndvi_pal}, 'NDVI');
+print(NDVImed)
+
+// Single Combined Plot over the years
+var plotNDVI = ui.Chart.image.seriesByRegion(S2, geometry,ee.Reducer.mean(),
+'nd',500,'system:time_start', 'system:index')
+              .setChartType('LineChart').setOptions({
+                title: 'NDVI short-term time series',
+                hAxis: {title: 'Date'},
+                vAxis: {title: 'NDVI'}
+});
+// Display.
+print(plotNDVI);
