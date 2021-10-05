@@ -1,0 +1,176 @@
+//****To create an EVI time series of an area using LANDSAT 8
+
+//***Choose your area/polygon and rename it as studyArea
+var studyArea = ee.FeatureCollection(table).geometry();
+Map.centerObject(studyArea)
+
+studyArea
+// Import landsat imagery. Create function to cloud mask from 
+// the pixel_qa band of Landsat 8 SR data. 
+// Bits 3 and 5 are cloud shadow and cloud, respectively.
+
+ var imageCollection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+   .filterBounds(studyArea);
+
+function maskL8sr(imageCollection) {
+   var cloudShadowBitMask = 1 << 3;
+   var cloudsBitMask = 1 << 5;
+
+   var qa = imageCollection.select('pixel_qa');
+
+   var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+       .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+
+   return imageCollection.updateMask(mask).divide(10000)
+       .select("B[0-9]*")
+       .copyProperties(imageCollection, ["system:time_start"]);
+ }
+
+// Make a list of years, then for each year filter the collection, 
+// mask clouds, and reduce by median. Important to add system:time_start 
+// after reducing as this allows you to filter by date later.
+ var stepList = ee.List.sequence(2014,2021);
+
+ var filterCollection = stepList.map(function(year){
+   var startDate = ee.Date.fromYMD(year,5,1);
+   var endDate = ee.Date.fromYMD(year,8,15);
+   var composite_i = imageCollection.filterDate(startDate, endDate)
+                         .map(maskL8sr)
+                        .median()
+                       .set('system:time_start',startDate);
+   return composite_i;
+ });
+
+ var yearlyComposites = ee.ImageCollection(filterCollection);
+ print(yearlyComposites, 'Masked and Filtered Composites');
+
+// Add Enhanced Vegetation Index to a function and apply it.
+ //EVI = 2.5 * ((NIR - Red) / (NIR + 6 * Red – 7.5 * Blue + 1))
+ function evi(img){
+   var eviImg = img.select(['B5','B4','B2'],['nir','red','blue']);
+  eviImg = eviImg.expression(
+     '(2.5 * ((NIR - RED)) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+       'NIR': eviImg.select('nir'),
+       'RED': eviImg.select('red'),
+      'BLUE': eviImg.select('blue')
+    }).rename('EVI');
+    return img.addBands(eviImg);
+ }
+
+yearlyComposites = yearlyComposites.map(function(image){
+  return evi(image);
+ });
+
+// print(yearlyComposites, 'With EVI as Band');
+
+// Create image collection of yearly composites, selecting the EVI band.
+ var eviCollection = yearlyComposites.select('EVI');
+ 
+ 
+  var y2015 = eviCollection.filterDate('2015-01-01','2015-12-31')
+   .median()
+   .clip(studyArea);
+  
+ var y2016 = eviCollection.filterDate('2016-01-01','2016-12-31')
+   .median()
+   .clip(studyArea);
+  
+ var y2017 = eviCollection.filterDate('2017-01-01','2017-12-31')
+   .first()
+   .clip(studyArea);
+  
+ var y2018 = eviCollection.filterDate('2018-01-01','2018-12-31')
+   .median()
+   .clip(studyArea);
+
+ var y2019 = eviCollection.filterDate('2019-01-01','2019-12-31')
+   .median()
+   .clip(studyArea);
+
+ var y2020 = eviCollection.filterDate('2020-01-01','2020-12-31')
+   .median()
+   .clip(studyArea);
+   
+   
+  var y2021 = eviCollection.filterDate('2021-01-01','2021-08-15')
+   .median()
+   .clip(studyArea); 
+   
+  
+ print(y2020, '2020 Composite Image');
+  
+ var eviParams = {min: 0, max: 1, palette: [
+    'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', '74A901',
+    '66A000', '529400', '3E8601', '207401', '056201', '004C00', '023B01',
+    '012E01', '011D01', '011301'
+  ]};
+//****Print as map layer
+// Map.addLayer(y2013, eviParams, '2013 EVI');
+// Map.addLayer(y2014, eviParams, '2014 EVI');
+ Map.addLayer(y2015, eviParams, '2015 EVI');
+ Map.addLayer(y2016, eviParams, '2016 EVI');
+ Map.addLayer(y2017, eviParams, '2017 EVI');
+ Map.addLayer(y2018, eviParams, '2018 EVI');
+ Map.addLayer(y2019, eviParams, '2019 EVI');
+ Map.addLayer(y2020, eviParams, '2020 EVI');
+ Map.addLayer(y2021, eviParams, '2021 EVI');
+// Export map to Drive.
+
+ var y2014section = eviCollection.filterDate('2014-01-01','2014-12-31')
+   .first()
+   .clip(studyArea);
+   
+   // ***************************Create a line chart to display EVI time series for a selected point.
+// Display chart in the console.
+ var chart = ui.Chart.image.series({
+   imageCollection: eviCollection.select('EVI'),
+   region: roi,
+   scale: 30
+ }).setOptions({title: 'Point 1: EVI Over Time'});
+
+ print(chart);
+
+
+//********************To create Time Series Animation of LANDSAT 8
+
+ //Define GIF visualization arguments.
+ var gifParams = {
+   'region': studyArea,
+   'dimensions': 800,
+   'framesPerSecond': 2,
+  'format': 'gif'
+ };
+
+// Labeling your images.
+ var annotations = [{
+   position: 'bottom',
+   offset: '10%',
+   margin: '20%',
+   property: 'year',
+   //increase scale if AOI is huge, reduce if AOI is small
+   scale: 300
+   }];
+  
+// Mapping over the collection to annotate each image.
+// Note that the "annotateImage" is a function written by Gena
+ var timeSeriesgif = eviWithYear.map(function(image) {
+   return text.annotateImage(image, eviParams, studyArea, annotations);
+ });
+
+// Print the GIF URL to the console
+ print(timeSeriesgif.getVideoThumbURL(gifParams));
+
+// Render the GIF animation in the console.
+ print(ui.Thumbnail(timeSeriesgif, gifParams));
+
+ //Simple image differencing between 2013 and 2021.
+ //var SimpleImageDiff = y2013.subtract(y2021);
+ //Map.centerObject(SimpleImageDiff)
+
+ //var diffParams = {min: -1, max: 1, palette: ['green', 'yellow', 'red']};
+ //Map.addLayer(SimpleImageDiff, diffParams, '2014/2020 Image Difference');
+
+// 2020 difference from mean EVI values.
+ var yMean = eviCollection.mean();
+ var AvgImageDiff = yMean.subtract(y2020);
+   
