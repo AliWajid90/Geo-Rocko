@@ -1,0 +1,114 @@
+//Geometry gradient bar = place it in your area, it will serve as a legend bar
+// geometry label = place it in your area, it will serve as a legend label
+
+
+//Change "chicama" to your study area
+var chicama = ee.FeatureCollection(table).geometry();
+// make a list with years
+var years = ee.List.sequence(2010,2016,1);
+var months = ee.List.sequence(1,12,1);
+
+// Import LST Data
+var tempCol2 = ee.ImageCollection('MODIS/MOD11A2')
+  .filterDate('2010-01-01', '2016-01-01')
+  .select('LST_Day_1km');
+  
+var tempCol = tempCol2.map(function(img) {
+  return img.clip(chicama).multiply(0.02).subtract(273.15).copyProperties(img,['system:time_start','system:time_end']); 
+});    
+  
+
+
+var col =  ee.ImageCollection.fromImages(
+  years.map(function (y) {
+    return months.map(function(m){
+      var start = ee.Date.fromYMD(y,m,1).advance(-1,"month");
+      var end = ee.Date.fromYMD(y,m,1).advance(1,"month");
+      var w = tempCol.filterDate(start,end).max();    
+                    
+      return w.set('year', y)
+              .set('month', m)
+              .set('system:time_start',start);
+  })}).flatten()
+);
+
+
+// Define RGB visualization parameters.
+var visParams = {
+  min: 0.0,
+  max: 40.0,
+  palette: ['blue', 'purple', 'cyan', 'green', 'yellow', 'red'],
+};
+
+// Add a color gradient bar with a label.
+geometryGradientBar = geometryGradientBar; // <-- this is a drawn geometry;
+var style = require('users/gena/packages:style');
+var utils = require('users/gena/packages:utils');
+var txt = require('users/gena/packages:text');
+
+var min = 0;
+var max = 40;
+var textProperties = {
+  fontSize: 12,
+  textColor: 'ffffff',
+  outlineColor: '000000',
+  outlineWidth: 0,
+  outlineOpacity: 0.6
+};
+var labels = ee.List.sequence(min, max);
+var gradientBar = style.GradientBar.draw(geometryGradientBar, {
+  min: min, max: max, palette: visParams.palette, labels: labels,
+  format: '%.0f', text: textProperties
+});
+
+var label = 'LST';
+var scale = Map.getScale() * 1; // scale text font relative to the current map scale
+geometryLabel = geometryLabel;  // <-- this comes from drawn point geometry
+//var text = text.draw(label, geometryLabel, scale, {fontSize: 32});
+
+// Create RGB visualization images for use as animation frames.
+// Blend the gradient bar and label images to the NDVI images.
+var rgbVis =col.map(function(img) {
+  var y = ee.Number(img.get("year")).toInt()
+  var m = ee.Number(img.get("month")).toInt()
+  var label = ee.String(y).cat("-").cat(m)
+  var text = txt.draw(label, geometryLabel, scale, {fontSize: 12});
+  return img.visualize(visParams).clip(chicama).blend(gradientBar).blend(text);
+});
+
+print(rgbVis)
+
+// Define GIF visualization arguments.
+var gifParams = {
+  'region': chicama,
+  'dimensions': 600,
+  //Change EPSG according to UTM of your country
+  'crs': 'EPSG:32717',
+  'framesPerSecond': 3,
+  'format': 'gif'
+};
+
+// Print the GIF URL to the console.
+print(rgbVis.getVideoThumbURL(gifParams));
+
+// Render the GIF animation in the console.
+print(ui.Thumbnail(rgbVis, gifParams));
+
+
+//Map Chart
+// Chart the time-series
+var temp_trend = ui.Chart.image.series({
+  imageCollection: tempCol,
+  region: chicama,
+  reducer: ee.Reducer.median(),
+  scale: 1000,
+  xProperty: 'system:time_start'})
+  .setOptions({
+    lineWidth: 1,
+    pointSize: 3,
+    trendlines: {0: {
+        color: 'CC0000'
+      }},
+     title: 'LST  Time Series',
+     vAxis: {title: 'LST Celsius'}});
+print(temp_trend);
