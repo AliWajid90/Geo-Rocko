@@ -1,0 +1,69 @@
+//******To plot a scatter plot between two variables over an area to analyze the correlation trends 
+
+//your AOI, rename is chicama to use this code/else rename all chicama based on your namevar dem = ee.Image('JAXA/ALOS/AW3D30_V1_1')
+  .select('MED')
+  .rename('elevation')
+
+
+
+//CHIRPS
+var chirps = ee.ImageCollection("UCSB-CHG/CHIRPS/PENTAD")
+
+// set start and end year
+var startyear = 2000; 
+var endyear = 2020; 
+
+// make a date object
+var startdate = ee.Date.fromYMD(startyear,1, 1);
+var enddate = ee.Date.fromYMD(endyear + 1, 1, 1);
+
+// make a list with years
+var years = ee.List.sequence(startyear, endyear);
+
+
+var annualPrecip = ee.ImageCollection.fromImages(
+  years.map(function (year) {
+    var annual = chirps
+        .filter(ee.Filter.calendarRange(year, year, 'year'))
+        .sum();
+    return annual
+        .set('year', year)
+        .set('system:time_start', ee.Date.fromYMD(year, 1, 1));
+}));
+
+var annualMean = annualPrecip.mean().clip(chicama);
+
+
+
+// combine two images
+var image = dem.addBands(annualMean)
+print(image)
+
+// sample N points from the 2-band image
+var scale = Map.getScale()
+var values = image.sample({ region: chicama, scale: scale, numPixels: 4000, geometries: true}) 
+
+Map.addLayer(values.style({ color: 'red', pointSize: 2 }), {}, 'samples')
+
+// plot sampled features as a scatter chart
+var chart = ui.Chart.feature.byFeature(values, 'elevation', ['precipitation'])
+  .setChartType('ScatterChart')
+  .setOptions({ 
+    title: 'Landsat 8 NDVI Time Series Center Chicama Basin, Peru',
+    trendlines: {0: {
+      color : 'red'
+    }},
+    pointSize: 3,
+    pointColor: 'red', 
+    width: 500, 
+    height: 500, 
+    titleX: 'elevation, [m]', 
+    titleY: 'precipitation, [mm]' })
+  
+  
+  
+  
+print(chart)  
+
+Map.centerObject(chicama);
+
