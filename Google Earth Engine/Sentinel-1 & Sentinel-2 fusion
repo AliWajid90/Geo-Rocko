@@ -1,0 +1,138 @@
+//Geometry here will be your polygon or study area
+Map.centerObject(geometry)
+
+var startdate='2019-07-27';
+var endate='2019-07-29';
+
+
+//mask clouds
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @param {ee.Image} image Sentinel-2 image
+ * @return {ee.Image} cloud masked Sentinel-2 image
+ */
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000)
+  .copyProperties(image, ['system:time_start']);
+}
+
+
+// Load Sentinel-2 TOA reflectance data.
+var dataset = ee.ImageCollection('COPERNICUS/S2')
+                  .filterDate(startdate,endate )
+                  // Pre-filter to get less cloudy granules.
+                  //.filterMetadata('MGRS_TILE', 'EQUALS','21LXG')
+                  //.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 60))
+                  .select('B2','B3','B4','QA60')
+                  .filterBounds(geometry)
+                  .map(maskS2clouds);
+                  
+var clippedCol=dataset.map(function(im){ 
+   return im.clip(geometry);
+});
+
+var image_one = ee.Image(clippedCol.mosaic());
+// print(image_one)
+var rgbVis = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2'],
+};
+
+
+Map.addLayer(image_one, rgbVis, 'image_1');
+
+//sentinel1
+
+
+var Sentinel1_vv = ee.ImageCollection('COPERNICUS/S1_GRD')
+        .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+        .filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'))
+        .filter(ee.Filter.eq('instrumentMode', 'IW'))
+        .select('VV')
+        .filterDate(startdate,endate)
+        .filterBounds(geometry);
+        
+var clippedVV= Sentinel1_vv.map(function(im){ 
+  return im.clip(geometry);
+}); 
+
+
+var Sentinel1_vh = ee.ImageCollection('COPERNICUS/S1_GRD')
+        .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+        .filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'))
+        .filter(ee.Filter.eq('instrumentMode', 'IW'))
+        .select('VH')
+        .filterDate(startdate,endate)
+        .filterDate(startdate,endate)
+        .filterBounds(geometry);
+        
+var clippedVH= Sentinel1_vh.map(function(im){ 
+  return im.clip(geometry);
+}); 
+
+
+
+
+var filterSpecklesVH = function(img) {
+  var vh = img.select('VH'); //select the VV polarization band
+  var vh_smoothed = vh.focal_median(130,'circle','meters').rename('VH_Filtered'); //Apply a focal median filter
+  return img.addBands(vh_smoothed); // Add filtered VV band to original image
+};
+
+var filterSpecklesVV = function(img) {
+  var vv = img.select('VV'); //select the VV polarization band
+  var vv_smoothed = vv.focal_median(120,'circle','meters').rename('VV_Filtered'); //Apply a focal median filter
+  return img.addBands(vv_smoothed); // Add filtered VV band to original image
+};
+
+
+// Map speckle noise filter across collection. Result is same collection, with smoothed VV band added to each image
+var VV_speckle = clippedVV.map(filterSpecklesVV);
+var VH_speckle = clippedVH.map(filterSpecklesVH);
+
+
+var img_vv=VV_speckle.mosaic().select('VV_Filtered');
+var img_vh=VH_speckle.mosaic().select('VH_Filtered');
+
+Map.addLayer(img_vh,{min:-30,max:-10},'filter VH');
+Map.addLayer(img_vv,{min:-30,max:-10},'filter VV');
+
+
+//Reproject
+
+
+//Get information about the  projection.
+var projection1 =  img_vv.projection();
+print('SENTINEL 1 PROJECTION:',  projection1);
+
+var projection2 =  image_one.projection();
+print('sentinel2 projection:',  projection2);
+
+var projection3 =  ee.Image(VV_speckle.first()).projection();
+print('non-mosaiced projection:',  projection3);
+
+//var prj_vv=img_vv.reproject({crs: projection2});
+var prj_vv=img_vv.reproject({crs: projection3}).reduceResolution({reducer: ee.Reducer.mean()});
+
+//var prj_vh=img_vh.reproject({crs: projection2});
+var prj_vh=img_vh.reproject({crs: projection3}).reduceResolution({reducer: ee.Reducer.mean()});
+
+// make an image for the two variables
+var pairedImage =  ee.ImageCollection.fromImages([image_one,prj_vv,prj_vh]).toBands().rename(["B2","B3","B4","QA60",'VV','VH']);
+
+var pairedImage =pairedImage.toFloat();
+
+print("pairedImage",pairedImage);
+
+
